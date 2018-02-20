@@ -13,6 +13,7 @@
 #define mqtt_server "192.168.44.1"
 #define mqtt_user "IoT_client"
 #define mqtt_password "leafy_switch_soup"
+
 #define humidity_topic "IoT/lab/humidity/"
 #define temperature_topic "IoT/lab/temperature/"
 
@@ -23,6 +24,7 @@ static PubSubClient client(wifiClient);
 
 static struct rflib_msg_t ackmsg;
 static at_ac_tuwien_iot1718_N2C msg_to_recv;
+static char* timestring = "1514761200"; // initial value 01.01.2018
 
 /*static struct {
   uint64_t address = 0xF0F0F0F0E1LL;
@@ -42,7 +44,7 @@ static bool pre_send(rflib_msg_t *msg, uint32_t timestamp)
   pb_ostream_t stream = pb_ostream_from_buffer(msg->data, RFLIB_MAX_MSGSIZE);
   bool enc_res = pb_encode(&stream, at_ac_tuwien_iot1718_C2N_fields, &msg_to_send);
   msg->size = enc_res ? stream.bytes_written : 0;
-  Serial.println(msg->size);
+  //Serial.println(msg->size);
   return enc_res;
 }
 
@@ -50,6 +52,14 @@ static bool post_recv(rflib_msg_t *msg, at_ac_tuwien_iot1718_N2C *msg_to_recv)
 {
   pb_istream_t stream = pb_istream_from_buffer(msg->data, msg->size);
   return pb_decode(&stream, at_ac_tuwien_iot1718_N2C_fields, msg_to_recv);
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  if(strncmp(topic, "Time/1",6) == 0){
+    strncpy(timestring, (char*)payload, 10);
+    Serial.print("Got Unix Timestamp: "); 
+    Serial.println(timestring); 
+  }  
 }
 
 void setup() {
@@ -64,7 +74,7 @@ void setup() {
     Serial.print("Init failed :(\n\r");
     abort();
   }else{
-    Serial.print("Init success :(\n\r"); 
+    Serial.print("Init success :)\n\r"); 
     //rflib_coordinator_set_reply(0, &ackmsg);       
   }
 }
@@ -139,6 +149,7 @@ static void reconnect() {
   while (!wifiClient.connected()) {
     Serial.print("Attempting MQTT connection...");
     if (client.connect("ESP8266Client", mqtt_user, mqtt_password)) {
+      client.setCallback(callback);
       Serial.println("connected");
     } else {
       Serial.print("failed, rc=");
@@ -148,36 +159,27 @@ static void reconnect() {
       delay(5000);
     }
   }
+  if (client.subscribe("Time/1")){
+    Serial.println("Subscribing to Time");  
+  }
 }
 
 static long lastMsg = 0;
 static float temp = 0.0;
 static float hum = 0.0;
 static rflib_msg_t msg;
-static uint8_t runcnt = 0;
+static char node_topic[50];
+static char* tmp_string = "    ";
 
 void loop() {
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
- 
-  float newHum = 70;//hdc.readHumidity();
- /*   hum = newHum;
-    Serial.print("New humidity:");
-    Serial.println(String(hum).c_str());
-    client.publish(humidity_topic, String(hum).c_str(), false);
-*/
- /*     if (runcnt % 5 == 0) {
-        toggle_ackmsg();
-      }*/
-      runcnt++;
-      pre_send(&ackmsg, runcnt);//timestamp is static 5  
+      pre_send(&ackmsg, strtol(timestring, 0, 0));//send timestamp to nodes  
       rflib_coordinator_set_reply(0, &ackmsg);      
-
       if (rflib_coordinator_available() == 0) {
         rflib_coordinator_read(&msg);
-        
         if (post_recv(&msg, &msg_to_recv)){
             Serial.println("Tutto bene!");  
             Serial.print("Room number: ");
@@ -188,14 +190,35 @@ void loop() {
             Serial.println(msg_to_recv.timestamp);
             Serial.print("Sensordata: ");
             Serial.println(msg_to_recv.data);
+            Serial.print("NodeID: ");
+            Serial.println(msg_to_recv.nodeId);
+            Serial.print("SebsorID: ");
+            Serial.println(msg_to_recv.sensorId);
           }else{
             Serial.println("Decoding failed! :(");  
         }
-        Serial.print("\n\r"); 
-        //publish humidity value
-        newHum = (float)* msg.data;
-        Serial.println(String(newHum).c_str());
-        client.publish(humidity_topic, String(newHum).c_str(), false);
+        //create mqtt topic
+        strncat(node_topic, "IoT/Room",sizeof("IoT/Room"));
+        sprintf(tmp_string,"%d", msg_to_recv.roomNo);
+        strncat(node_topic, tmp_string,sizeof(tmp_string));
+        strncat(node_topic, "/Node",sizeof("/Node"));
+        sprintf(tmp_string,"%d", msg_to_recv.nodeId);
+        strncat(node_topic, tmp_string,sizeof(tmp_string));
+        strncat(node_topic, "/Sensor", sizeof("/Sensor"));
+        sprintf(tmp_string,"%d", msg_to_recv.sensorId);
+        strncat(node_topic, tmp_string,sizeof(tmp_string));
+        //set sensor type
+        if(msg_to_recv.type == 1){
+          strncat(node_topic, "/temperature/", sizeof("/temperature/"));  
+        }else if(msg_to_recv.type == 2){
+          strncat(node_topic, "/humidity/", sizeof("/humidity/"));  
+        }else{
+          strncat(node_topic, "/unknown/", sizeof("/unknown/"));  
+        }
+
+        Serial.print(node_topic);
+        Serial.println(msg_to_recv.data);
+        client.publish(node_topic, String(msg_to_recv.data).c_str(), false);
+        memset(node_topic,'\0',50);
       }
-  delay(50);
 }
