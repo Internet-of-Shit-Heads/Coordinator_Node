@@ -1,3 +1,5 @@
+#define INITIAL_UPDATE_INTERVAL 30
+
 #include <sensordata.pb.h>
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -9,7 +11,7 @@
 #include <FS.h>
 #include <rflib.h>
 //node configuration header
-#include "node_config.h"
+#include "cfglib.h"
 
 static WiFiClientSecure wifiClient;
 static PubSubClient client(wifiClient);
@@ -21,11 +23,31 @@ static at_ac_tuwien_iot1718_C2N msg_to_send;
 // initial value 01.01.2018
 static uint32_t unix_time = 1514761200;
 //current update interval for the nodes
-static uint8_t update_interval = 60;
+static uint8_t update_interval = INITIAL_UPDATE_INTERVAL;
 //last used update interval
-static uint8_t last_update_interval = 30;
+static uint8_t last_update_interval = INITIAL_UPDATE_INTERVAL;
 static uint32_t timeout = 0;
 static char node_topic[50];
+
+struct coordinator_config esp_config = {
+  .mqtt_server = "192.168.44.1",
+  .mqtt_user = "IoT_client",
+  .mqtt_password = "leafy_switch_soup",
+  .mqtt_topic_timestamp = "Time/1",
+  .mqtt_topic_update_interval = "Interval/1",
+  .mqtt_port = 1883,
+  .wifi_ssid = "IoT_17_18",
+  .wifi_password = "heavy_cat_radiator",
+  .address = 0xF0F0F0F0E1LL,
+  .channel = 0,
+  .delay = 15,
+  .retransmits = 15,
+  .auth_key = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+  .cepin = 0,
+  .cspin = 15,
+  .baud_rate = 115200,
+  .debug = DEBUG_OFF,
+};
 
 //creating mqtt topic for all measurement values
 void mqtt_create_topic(){
@@ -70,7 +92,7 @@ static bool post_recv(rflib_msg_t *msg, at_ac_tuwien_iot1718_N2C *msg_to_recv)
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  if(strncmp(topic, coordinator_config.mqtt_topic_update_interval,10) == 0){
+  if(strncmp(topic, esp_config.mqtt_topic_update_interval,10) == 0){
     update_interval = strtol((char*)payload, 0, 0);
     Serial.print("Got new update interval in seconds: "); 
     Serial.println(update_interval);//strtol(update_interval, 0, 0)); 
@@ -87,7 +109,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     memset(payload, 0, 10);
     last_update_interval = update_interval;
   } 
-  if(strncmp(topic, coordinator_config.mqtt_topic_timestamp, 6) == 0){
+  if(strncmp(topic, esp_config.mqtt_topic_timestamp, 6) == 0){
     unix_time = strtol((char*)payload, 0, 0);
     Serial.print("Got Unix Timestamp: "); 
     Serial.println(unix_time); 
@@ -96,13 +118,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 void setup(){
-  Serial.begin(coordinator_config.baud_rate);
+  Serial.begin(esp_config.baud_rate);
   setup_certificates();
   wifi_connect();
-  client.setServer(coordinator_config.mqtt_server, coordinator_config.mqtt_port);
+  client.setServer(esp_config.mqtt_server, esp_config.mqtt_port);
   Serial.print("Begin init\n\r");
   delay(200);
-  if (rflib_coordinator_init(coordinator_config.cepin, coordinator_config.cspin, coordinator_config.channel, &coordinator_config.address, 1, coordinator_config.delay, coordinator_config.retransmits) < 0) {
+  if (rflib_coordinator_init(esp_config.cepin, esp_config.cspin, esp_config.channel, &esp_config.address, 1, esp_config.delay, esp_config.retransmits) < 0) {
     Serial.print("Init failed :(\n\r");
     abort();
   }else{
@@ -144,8 +166,8 @@ static void setup_certificates(){
 static void wifi_connect(){  
   Serial.println();
   Serial.print("Connecting to ");
-  Serial.println(coordinator_config.wifi_ssid);
-  WiFi.begin(coordinator_config.wifi_ssid, coordinator_config.wifi_password);
+  Serial.println(esp_config.wifi_ssid);
+  WiFi.begin(esp_config.wifi_ssid, esp_config.wifi_password);
 
   while(WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -164,7 +186,7 @@ static void reconnect(){
   }
   while(!wifiClient.connected()){
     Serial.print("Attempting MQTT connection...");
-    if (client.connect("ESP8266Client", coordinator_config.mqtt_user, coordinator_config.mqtt_password)) {
+    if (client.connect("ESP8266Client", esp_config.mqtt_user, esp_config.mqtt_password)) {
       client.setCallback(callback);
       Serial.println("connected");
     }else{
@@ -174,10 +196,10 @@ static void reconnect(){
       delay(5000);
     }
   }
-  if (client.subscribe(coordinator_config.mqtt_topic_timestamp)){
+  if (client.subscribe(esp_config.mqtt_topic_timestamp)){
     Serial.println("Subscribing to Time");  
   }
-  if (client.subscribe(coordinator_config.mqtt_topic_update_interval)){
+  if (client.subscribe(esp_config.mqtt_topic_update_interval)){
     Serial.println("Subscribing to Update Interval");  
   }
 }
@@ -193,7 +215,7 @@ void loop(){
   if(pre_send(&ackmsg, unix_time) < 0){
     return;
   }
-  ackmsg.size = cryptlib_auth(ackmsg.data, ackmsg.size, RFLIB_MAX_MSGSIZE, coordinator_config.mac_key);
+  ackmsg.size = cryptlib_auth(ackmsg.data, ackmsg.size, RFLIB_MAX_MSGSIZE, esp_config.auth_key);
   if(!(ackmsg.size < 0)){
     rflib_coordinator_set_reply(0, &ackmsg);     
   }else{
@@ -201,7 +223,7 @@ void loop(){
   }
   if(rflib_coordinator_available() == 0){
     rflib_coordinator_read(&msg);
-    msg.size = cryptlib_verify(msg.data, msg.size, coordinator_config.mac_key);
+    msg.size = cryptlib_verify(msg.data, msg.size, esp_config.auth_key);
     //Check for a valid message
     if(msg.size < 0){
       return;
