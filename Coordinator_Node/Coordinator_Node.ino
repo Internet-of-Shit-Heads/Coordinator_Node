@@ -41,13 +41,17 @@ void mqtt_create_topic(){
   sprintf(tmp_string,"%d", msg_to_recv.sensorId);
   strncat(node_topic, tmp_string,sizeof(tmp_string));
   //set sensor type
-  if(msg_to_recv.type == 1){
-    strncat(node_topic, "/temperature/", sizeof("/temperature/"));  
-  }else if(msg_to_recv.type == 2){
-    strncat(node_topic, "/humidity/", sizeof("/humidity/"));  
-  }else{
-    strncat(node_topic, "/unknown/", sizeof("/unknown/"));  
-  }      
+  switch(msg_to_recv.type){
+    case 1:
+      strncat(node_topic, "/temperature/", sizeof("/temperature/"));
+      break;
+    case 2:
+      strncat(node_topic, "/humidity/", sizeof("/humidity/"));
+      break;
+    default:
+      strncat(node_topic, "/unknown/", sizeof("/unknown/"));   
+      break; 
+  }
 }
 
 static bool pre_send(rflib_msg_t *msg, uint32_t timestamp)
@@ -91,7 +95,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }   
 }
 
-void setup() {
+void setup(){
   Serial.begin(coordinator_config.baud_rate);
   setup_certificates();
   wifi_connect();
@@ -107,28 +111,27 @@ void setup() {
   }
 }
 
-static void setup_certificates() {
+static void setup_certificates(){
   delay(10);
   SPIFFS.begin();
   File key = SPIFFS.open("/coordinator.key.der","r");
   if(wifiClient.loadPrivateKey(key, key.size())) {
     Serial.println("Loaded Key");
-  } else {
+  }else{
     Serial.println("Didn't load Key");
   }  
   //load client cert
   File c_cert = SPIFFS.open("/coordinator.crt.der","r");
   if(wifiClient.loadCertificate(c_cert, c_cert.size())) {
     Serial.println("Loaded Cert");
-  } else {
+  }else{
     Serial.println("Didn't load cert");
     return;
   }
   File ca = SPIFFS.open("/ca.der", "r"); 
   if (!ca) {
     Serial.println("Failed to open CA file");
-  }
-  else {
+  }else{
     Serial.println("Success to open CA file");
     if(wifiClient.loadCACert(ca)){
       Serial.println("CA loaded");
@@ -144,7 +147,7 @@ static void wifi_connect(){
   Serial.println(coordinator_config.wifi_ssid);
   WiFi.begin(coordinator_config.wifi_ssid, coordinator_config.wifi_password);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  while(WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
@@ -154,7 +157,11 @@ static void wifi_connect(){
   Serial.println(WiFi.localIP());   
 }
 
-static void reconnect() {
+static void reconnect(){
+  if(WiFi.status() != WL_CONNECTED) {
+    Serial.println("Reconnect WIFI");
+    wifi_connect();
+  }
   while(!wifiClient.connected()){
     Serial.print("Attempting MQTT connection...");
     if (client.connect("ESP8266Client", coordinator_config.mqtt_user, coordinator_config.mqtt_password)) {
@@ -175,7 +182,7 @@ static void reconnect() {
   }
 }
 
-void loop() {
+void loop(){
   if (!client.connected()) {
     reconnect();
   }
