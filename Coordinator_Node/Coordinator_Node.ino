@@ -16,8 +16,6 @@
 #define mqtt_user "IoT_client"
 #define mqtt_password "leafy_switch_soup"
 
-const uint64_t pipes[1] = { 0xF0F0F0F0E1LL };
-
 static WiFiClientSecure wifiClient;
 static PubSubClient client(wifiClient);
 
@@ -25,23 +23,23 @@ static struct rflib_msg_t ackmsg;
 static at_ac_tuwien_iot1718_N2C msg_to_recv;
 static at_ac_tuwien_iot1718_C2N msg_to_send;
 static char* timestring = "1514761200"; // initial value 01.01.2018
-static int update_interval_counter = 0;
 static char* update_interval =   "0000000060"; //initial update interval
+static char* last_update_interval =   "0000000030"; //saved update interval
 static int timeout = 0;
-/*static struct {
+
+static struct {
   uint64_t address = 0xF0F0F0F0E1LL;
-  unsigned int baud_rate = 57600;
+  unsigned int baud_rate = 115200;
   uint16_t cepin = 9;
   uint16_t cspin = 10;
   uint8_t channel = 0;
   uint8_t delay = 15;
   uint8_t retransmits = 15;
 } coordinator_config;
-*/
+
 static bool pre_send(rflib_msg_t *msg, uint32_t timestamp)
 {
   msg_to_send.timestamp = timestamp;
-
   pb_ostream_t stream = pb_ostream_from_buffer(msg->data, RFLIB_MAX_MSGSIZE);
   bool enc_res = pb_encode(&stream, at_ac_tuwien_iot1718_C2N_fields, &msg_to_send);
   msg->size = enc_res ? stream.bytes_written : 0;
@@ -56,17 +54,22 @@ static bool post_recv(rflib_msg_t *msg, at_ac_tuwien_iot1718_N2C *msg_to_recv)
 
 void callback(char* topic, byte* payload, unsigned int length) {
   if(strncmp(topic, "Interval/1",10) == 0){
+    memset(update_interval, 0, sizeof(update_interval));
     strncpy(update_interval, (char*)payload, 10);
     Serial.print("Got new update interval in seconds: "); 
     Serial.println(strtol(update_interval, 0, 0)); 
     msg_to_send.has_command = true;
     msg_to_send.timestamp = strtol(timestring, 0, 0);
-    timeout = msg_to_send.timestamp + 3 * strtol(update_interval, 0, 0);
+    Serial.print("last update interval: ");
+    Serial.println(last_update_interval);
+    timeout = msg_to_send.timestamp + 3 * strtol(last_update_interval, 0, 0);
+    Serial.print("set last_update_timeout to: ");
+    Serial.println(last_update_interval);
     msg_to_send.command.type = at_ac_tuwien_iot1718_Command_CommandType_NEW_UPDATE_INTERVAL;
     msg_to_send.command.has_param1 = true;
     msg_to_send.command.param1 = strtol(update_interval, 0, 0);
-    update_interval_counter = strtol(update_interval, 0, 0) * 1000;
     memset(payload, 0, 10);
+    strncpy(last_update_interval, update_interval, sizeof(update_interval));
   } 
   if(strncmp(topic, "Time/1",6) == 0){
     strncpy(timestring, (char*)payload, 10);
@@ -77,14 +80,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(coordinator_config.baud_rate);
   setup_certificates();
   wifi_connect();
   client.setServer(mqtt_server, 1883);
   Serial.print("Begin init\n\r");
   // Give some time 
   delay(100);
-  if (rflib_coordinator_init(0, 15, 0, pipes, 1, 15, 15) < 0) {
+  if (rflib_coordinator_init(0, 15, 0, &coordinator_config.address, 1, 15, 15) < 0) {
     Serial.print("Init failed :(\n\r");
     abort();
   }else{
@@ -198,9 +201,8 @@ void loop() {
  Serial.flush();
       if(strtol(timestring, 0, 0) > timeout){
         msg_to_send.has_command = false;
-        //Serial.println("don´t send interval");
+    //    Serial.println("don´t send interval and update the last update interval");
       }else{
-        update_interval_counter--; 
         //Serial.println("send interval");
       }
       
